@@ -35,3 +35,8 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+node_modules/
+.env
+npm-debug.log
+.expo/
