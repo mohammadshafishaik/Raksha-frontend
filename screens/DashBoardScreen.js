@@ -61,7 +61,7 @@ const DashboardScreen = ({ navigation, route }) => {
   const [contactFormLoading, setContactFormLoading] = useState(false);
 
 
-  const backendBaseUrl = 'http://192.168.1.12:5000'; // <--- VERIFY/REPLACE THIS WITH YOUR CURRENT IP
+  const backendBaseUrl = 'https://raksha-backend-und2.onrender.com'; // <--- VERIFY/REPLACE THIS WITH YOUR CURRENT IP
 
   const mapRef = useRef(null);
 
