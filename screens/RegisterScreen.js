@@ -15,6 +15,9 @@ const RegisterScreen = ({ navigation }) => {
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false); // For showing loading state
 
+  // CORRECT: This is your backend's base URL (the domain)
+  const backendBaseUrl = 'https://raksha-backend-d1gkrxvx8-mohammadshafishaiks-projects.vercel.app'; // <-- REPLACE THIS WITH YOUR ACTUAL VERCELL URL
+  
   const handleRegister = async () => {
     if (!name || !email || !password || !phone) {
       Alert.alert('Error', 'Please fill in all fields.');
@@ -24,11 +27,10 @@ const RegisterScreen = ({ navigation }) => {
     setLoading(true); // Start loading
 
     try {
-      // IMPORTANT: Replace with your computer's actual local IP address if testing on a physical device.
-      // Example: 'http://192.168.1.100:5000/api/users/register'
-      const backendUrl = 'http://192.168.1.6:5000/api/users/register'; // Keep localhost for simulator, change for physical device
+      // CORRECT: The specific endpoint path is appended here
+      const registerUrl = `${backendBaseUrl}/api/users/register`; 
 
-      const response = await fetch(backendUrl, {
+      const response = await fetch(registerUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

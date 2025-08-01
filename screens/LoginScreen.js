@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Alert, Dimensions, TouchableOpacity } from 'react-native';
 import Input from '../components/input';
 import Button from '../components/Button';
-import GlassCard from '../components/GlassCard'; // Import the new GlassCard component
+import GlassCard from '../components/GlassCard';
 
 const { width } = Dimensions.get('window');
 
@@ -12,6 +12,9 @@ const LoginScreen = ({ navigation }) => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // CORRECT: This is your backend's base URL (the domain)
+  const backendBaseUrl = 'https://raksha-backend-d1gkrxvx8-mohammadshafishaiks-projects.vercel.app'; 
+  
   const handleLogin = async () => {
     if (!email || !password) {
       Alert.alert('Error', 'Please enter your email and password.');
@@ -21,11 +24,10 @@ const LoginScreen = ({ navigation }) => {
     setLoading(true);
 
     try {
-      // IMPORTANT: Replace with your computer's actual local IP address if testing on a physical device.
-      // Example: 'http://192.168.1.100:5000/api/users/login'
-      const backendUrl = 'http://192.168.1.6:5000/api/users/login'; // Keep localhost for simulator, change for physical device
+      // CORRECT: The specific endpoint path is appended here
+      const loginUrl = `${backendBaseUrl}/api/users/login`;
 
-      const response = await fetch(backendUrl, {
+      const response = await fetch(loginUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -36,11 +38,8 @@ const LoginScreen = ({ navigation }) => {
       const data = await response.json();
       if (response.ok) {
         Alert.alert('Success', 'Login successful! Token received.');
-        console.log('Login Token:', data.token); // For now, just log the token
-        // TODO: In a real app, you would save this token securely (e.g., using AsyncStorage)
-        // For now, we'll pass it or rely on a global state later.
-        // IMPORTANT: Pass the token to the Dashboard or store it globally for use in API calls
-        navigation.navigate('Dashboard', { token: data.token }); // Pass token to dashboard
+        console.log('Login Token:', data.token);
+        navigation.navigate('Dashboard', { token: data.token });
       } else {
         Alert.alert('Login Failed', data.msg || 'Invalid credentials or server error.');
       }
@@ -103,7 +102,7 @@ const styles = StyleSheet.create({
     width: '100%',
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f0f2f5', // Light background color
+    backgroundColor: '#f0f2f5',
     paddingVertical: 40,
   },
   card: {
