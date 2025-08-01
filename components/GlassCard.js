@@ -1,4 +1,3 @@
-// frontend/components/GlassCard.js
 import React from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 

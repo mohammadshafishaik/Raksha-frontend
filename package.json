@@ -21,7 +21,9 @@
     "expo-location": "~18.1.6",
     "expo-task-manager": "~13.1.6",
     "react-native-maps": "1.20.1",
-    "expo-notifications": "~0.31.4"
+    "expo-notifications": "~0.31.4",
+    "expo-av": "~15.1.7",
+    "expo-sensors": "~14.1.4"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0"

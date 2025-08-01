@@ -23,7 +23,7 @@ const LoginScreen = ({ navigation }) => {
     try {
       // IMPORTANT: Replace with your computer's actual local IP address if testing on a physical device.
       // Example: 'http://192.168.1.100:5000/api/users/login'
-      const backendUrl = 'http://192.168.1.12:5000/api/users/login'; // Keep localhost for simulator, change for physical device
+      const backendUrl = 'http://192.168.1.6:5000/api/users/login'; // Keep localhost for simulator, change for physical device
 
       const response = await fetch(backendUrl, {
         method: 'POST',

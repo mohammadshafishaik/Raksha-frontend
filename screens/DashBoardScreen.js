@@ -1,6 +1,5 @@
-// frontend/screens/DashboardScreen.js
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Alert, Dimensions, TouchableOpacity, ActivityIndicator, ScrollView, Linking, Modal, TextInput, Platform } from 'react-native'; // *** MODIFIED: Added Platform ***
+import { View, Text, StyleSheet, Alert, Dimensions, TouchableOpacity, ActivityIndicator, ScrollView, Linking, Modal, TextInput, Platform } from 'react-native';
 import Button from '../components/Button';
 import GlassCard from '../components/GlassCard';
 import * as Location from 'expo-location';
@@ -8,7 +7,10 @@ import * as TaskManager from 'expo-task-manager';
 import MapView, { Marker, UrlTile, Polygon } from 'react-native-maps';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { fetchNearbyPlaces } from '../utils/osmPlaces';
-import * as Notifications from 'expo-notifications'; // *** NEW IMPORT ***
+import * as Notifications from 'expo-notifications';
+import { Audio } from 'expo-av'; // NOTE: expo-av is deprecated in SDK 54+. Consider migrating to expo-audio and expo-video when upgrading SDK.
+import { Accelerometer } from 'expo-sensors';
+
 
 const { width, height } = Dimensions.get('window');
 const ASPECT_RATIO = width / height;
@@ -60,8 +62,34 @@ const DashboardScreen = ({ navigation, route }) => {
   const [contactEmail, setContactEmail] = useState('');
   const [contactFormLoading, setContactFormLoading] = useState(false);
 
+  // --- AUDIO RECORDING STATE ---
+  const [isRecording, setIsRecording] = useState(false);
+  const [recording, setRecording] = useState(null);
+  const [recordedUri, setRecordedUri] = useState(null);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const recordingIntervalRef = useRef(null);
+  // --- END AUDIO RECORDING STATE ---
 
-  const backendBaseUrl = 'https://raksha-backend-und2.onrender.com'; // <--- VERIFY/REPLACE THIS WITH YOUR CURRENT IP
+  // --- FAKE CALL STATE ---
+  const [isFakeCallModalVisible, setIsFakeCallModalVisible] = useState(false); // Corrected variable name
+  const [fakeCallerName, setFakeCallerName] = useState('Mom');
+  const [fakeCallerNumber, setFakeCallerNumber] = useState('9133220649');
+  const [fakeCallDelay, setFakeCallDelay] = useState('5'); // in seconds, default to 10
+  const fakeCallTimeoutRef = useRef(null); // To store the setTimeout ID
+  const [fakeCallScheduled, setFakeCallScheduled] = useState(false); // To indicate if a call is scheduled
+  const [fakeCallCountdown, setFakeCallCountdown] = useState(0); // For displaying countdown
+  const countdownIntervalRef = useRef(null); // For countdown interval
+  const ringtoneSoundObject = useRef(new Audio.Sound()); // For managing ringtone playback
+  // --- END FAKE CALL STATE ---
+
+  // *** SHAKE DETECTION STATE ***
+  const [accelerometerSubscription, setAccelerometerSubscription] = useState(null);
+  const SHAKE_THRESHOLD = 2.0; // Adjust this value based on testing (lower is more sensitive)
+  const SHAKE_COOLDOWN = 3000; // Milliseconds to wait before allowing another SOS after a shake
+  const lastShakeTime = useRef(0);
+  // *** END SHAKE DETECTION STATE ***
+
+  const backendBaseUrl = 'http://192.168.1.6:5000'; // <--- VERIFY/REPLACE THIS WITH YOUR CURRENT IP
 
   const mapRef = useRef(null);
 
@@ -73,9 +101,10 @@ const DashboardScreen = ({ navigation, route }) => {
     }
   }, [route.params?.token]);
 
-  // Effect for initial setup and location permissions
+  // Main Effect for initial setup, permissions, and all sensor subscriptions
   useEffect(() => {
     (async () => {
+      // Location permissions
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         setErrorMsg('Permission to access location was denied');
@@ -91,12 +120,32 @@ const DashboardScreen = ({ navigation, route }) => {
       startForegroundLocationUpdates();
     })();
 
+    // Start accelerometer listening
+    subscribeToAccelerometer();
+
+    // Load ringtone for fake call
+    loadRingtone();
+
+    // --- Cleanup for all effects on unmount ---
     return () => {
       if (locationSubscription.current) {
         locationSubscription.current.remove();
       }
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+      }
+      if (fakeCallTimeoutRef.current) {
+        clearTimeout(fakeCallTimeoutRef.current);
+      }
+      if (countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+      }
+      if (ringtoneSoundObject.current) {
+        ringtoneSoundObject.current.unloadAsync();
+      }
+      unsubscribeFromAccelerometer(); // Clean up accelerometer subscription
     };
-  }, []);
+  }, []); // Empty dependency array means this runs once on mount and once on unmount
 
   // Effect to fetch trusted contacts, nearby places, and danger zones when authToken or location is available/changes
   useEffect(() => {
@@ -426,7 +475,182 @@ const DashboardScreen = ({ navigation, route }) => {
       .catch((err) => console.error('An error occurred', err));
   };
 
-  // *** NEW: Push Notification Setup Function ***
+  // *** AUDIO RECORDING FUNCTIONS ***
+  const startRecording = async () => {
+    try {
+      const { status } = await Audio.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission required!', 'Please grant microphone access to record audio.');
+        return;
+      }
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      console.log('Starting recording...');
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      setRecording(recording);
+      setIsRecording(true);
+      setRecordedUri(null); // Clear previous recording URI
+      setRecordingDuration(0);
+
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingDuration(prevDuration => prevDuration + 1);
+      }, 1000);
+
+      console.log('Recording started');
+    } catch (err) {
+      console.error('Failed to start recording', err);
+      Alert.alert('Recording Error', 'Failed to start audio recording.');
+      setIsRecording(false);
+    }
+  };
+
+  const stopRecording = async () => {
+    if (!recording) {
+      console.warn('No recording in progress to stop.');
+      return;
+    }
+
+    console.log('Stopping recording...');
+    setIsRecording(false);
+    clearInterval(recordingIntervalRef.current); // Stop duration updates
+    recordingIntervalRef.current = null; // Clear the ref
+    setRecordingDuration(0); // Reset duration display
+
+    try {
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecordedUri(uri); // Save the URI
+      setRecording(null); // Clear the recording object
+      console.log('Recording stopped and stored at', uri);
+      Alert.alert('Recording Saved', `Audio saved to: ${uri}\n\n(In a real app, this would be uploaded to your server)`);
+      // TODO: Implement logic here to upload `uri` to your backend
+    } catch (err) {
+      console.error('Failed to stop recording', err);
+      Alert.alert('Recording Error', 'Failed to stop audio recording.');
+    }
+  };
+  // *** END AUDIO RECORDING FUNCTIONS ***
+
+  // *** FAKE CALL FUNCTIONS ***
+  const loadRingtone = async () => {
+    try {
+      // YOU NEED TO ADD YOUR OWN RINGTONE.MP3 FILE IN frontend/assets/
+      await ringtoneSoundObject.current.loadAsync(require('../assets/ringtone.mp3'));
+      ringtoneSoundObject.current.setIsLoopingAsync(true); // Loop the ringtone
+    } catch (error) {
+      console.error('Failed to load ringtone sound', error);
+      // Removed alert here to prevent multiple alerts on load if ringtone is missing.
+      // An alert is already shown on initial load in the main useEffect.
+    }
+  };
+
+  const scheduleFakeCall = () => {
+    const delay = parseInt(fakeCallDelay, 10);
+    if (isNaN(delay) || delay <= 0) {
+      Alert.alert('Error', 'Please enter a valid delay (e.g., 10 for 10 seconds).');
+      return;
+    }
+
+    Alert.alert('Fake Call Scheduled!', `A fake call from ${fakeCallerName} will ring in ${delay} seconds.`);
+    setFakeCallScheduled(true);
+    setFakeCallCountdown(delay);
+
+    // Start countdown
+    countdownIntervalRef.current = setInterval(() => {
+      setFakeCallCountdown(prevCount => {
+        if (prevCount <= 1) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+          return 0;
+        }
+        return prevCount - 1;
+      });
+    }, 1000);
+
+    // Schedule the actual call
+    fakeCallTimeoutRef.current = setTimeout(async () => {
+      setIsFakeCallModalVisible(true); // Corrected variable name
+      setFakeCallScheduled(false); // Reset scheduled state
+      try {
+        await ringtoneSoundObject.current.replayAsync(); // Start playing ringtone
+      } catch (error) {
+        console.error('Failed to play ringtone:', error);
+      }
+    }, delay * 1000); // Convert seconds to milliseconds
+  };
+
+  const cancelFakeCall = () => {
+    if (fakeCallTimeoutRef.current) {
+      clearTimeout(fakeCallTimeoutRef.current);
+      fakeCallTimeoutRef.current = null;
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setFakeCallScheduled(false);
+    setFakeCallCountdown(0);
+    Alert.alert('Fake Call Cancelled', 'The scheduled fake call has been cancelled.');
+  };
+
+  const handleEndFakeCall = async () => {
+    setIsFakeCallModalVisible(false); // Corrected variable name
+    try {
+      if (ringtoneSoundObject.current) {
+        await ringtoneSoundObject.current.stopAsync(); // Stop ringtone
+        await ringtoneSoundObject.current.setPositionAsync(0); // Reset ringtone to start
+      }
+    } catch (error) {
+      console.error('Error stopping ringtone:', error);
+    }
+  };
+  // *** END FAKE CALL FUNCTIONS ***
+
+  // *** NEW SHAKE DETECTION FUNCTIONS ***
+  const subscribeToAccelerometer = () => {
+    // Set update interval for accelerometer (e.g., 100ms for faster detection)
+    Accelerometer.setUpdateInterval(100);
+
+    setAccelerometerSubscription(
+      Accelerometer.addListener(accelerometerData => {
+        const { x, y, z } = accelerometerData;
+
+        // Calculate overall acceleration magnitude
+        const accelerationMagnitude = Math.sqrt(x * x + y * y + z * z);
+
+        // Check if acceleration exceeds threshold and cooldown is over
+        if (
+          accelerationMagnitude > SHAKE_THRESHOLD &&
+          (Date.now() - lastShakeTime.current > SHAKE_COOLDOWN)
+        ) {
+          lastShakeTime.current = Date.now();
+          console.log('SHAKE DETECTED! Accelerometer magnitude:', accelerationMagnitude);
+          Alert.alert('Shake Detected', 'Initiating SOS...');
+          handleSOS(); // Trigger your existing SOS function
+          // Optionally, unsubscribe temporarily after SOS to prevent multiple triggers
+          // unsubscribeFromAccelerometer(); // Uncomment if you want to temporarily disable after one shake
+        }
+      })
+    );
+  };
+
+  const unsubscribeFromAccelerometer = () => {
+    if (accelerometerSubscription) {
+      accelerometerSubscription.remove();
+      setAccelerometerSubscription(null);
+      console.log('Accelerometer monitoring stopped.');
+    }
+  };
+  // *** END NEW SHAKE DETECTION FUNCTIONS ***
+
+
+  // *** PUSH NOTIFICATION SETUP FUNCTION ***
   const registerForPushNotificationsAsync = async (token) => {
     let pushToken;
     if (Platform.OS === 'android') {
@@ -474,7 +698,7 @@ const DashboardScreen = ({ navigation, route }) => {
     }
   };
 
-  // *** NEW: Effect to trigger push notification setup on auth token change ***
+  // *** Effect to trigger push notification setup on auth token change ***
   useEffect(() => {
     if (authToken) {
       registerForPushNotificationsAsync(authToken);
@@ -516,7 +740,6 @@ const DashboardScreen = ({ navigation, route }) => {
       <ScrollView contentContainerStyle={styles.scrollContentContainer}>
         <View style={styles.backgroundGradient}>
           <GlassCard style={styles.card}>
-            {/* NEW: Your safety is our priority quote */}
             <Text style={styles.priorityQuote}>Your Safety, Our Priority.</Text>
             <Text style={styles.realTimeProtection}>Real-Time Protection.</Text>
 
@@ -651,11 +874,22 @@ const DashboardScreen = ({ navigation, route }) => {
             )}
 
             <Button
-              title="Quick Police Call"
+              title="Quick Police Call📱"
               onPress={handlePoliceCall}
               style={styles.policeCallButton}
               textStyle={styles.policeCallButtonText}
             />
+
+            {/* AUDIO RECORDING BUTTON */}
+            <Button
+              title={isRecording ? `Stop Recording (${recordingDuration}s)` : 'Start Audio Record 🎤'}
+              onPress={isRecording ? stopRecording : startRecording}
+              style={[styles.audioRecordButton, isRecording ? styles.recordingActive : {}]}
+              textStyle={styles.audioRecordButtonText}
+            />
+            {recordedUri && !isRecording && (
+              <Text style={styles.lastRecordingText}>Last Recording Saved!</Text>
+            )}
 
             <Button
               title={sosLoading ? 'Sending SOS...' : 'SOS Panic Button'}
@@ -664,6 +898,54 @@ const DashboardScreen = ({ navigation, route }) => {
               style={styles.sosButton}
               textStyle={styles.sosButtonText}
             />
+
+            {/* FAKE CALL SETUP SECTION */}
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Fake Call Setup</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Caller Name (e.g., Mom, Boss)"
+                placeholderTextColor="#888"
+                value={fakeCallerName}
+                onChangeText={setFakeCallerName}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Caller Number (e.g., +1234567890)"
+                placeholderTextColor="#888"
+                value={fakeCallerNumber}
+                onChangeText={setFakeCallerNumber}
+                keyboardType="phone-pad"
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Delay in Seconds (e.g., 10, 30, 60)"
+                placeholderTextColor="#888"
+                value={fakeCallDelay}
+                onChangeText={setFakeCallDelay}
+                keyboardType="numeric"
+              />
+
+              {fakeCallScheduled ? (
+                <>
+                  <Text style={styles.scheduledText}>
+                    Call scheduled in {fakeCallCountdown} seconds...
+                  </Text>
+                  <Button
+                    title="Cancel Fake Call"
+                    onPress={cancelFakeCall}
+                    style={styles.cancelFakeCallButton}
+                    textStyle={styles.cancelFakeCallButtonText}
+                  />
+                </>
+              ) : (
+                <Button
+                  title="Schedule Fake Call 📞"
+                  onPress={scheduleFakeCall}
+                  style={styles.scheduleFakeCallButton}
+                />
+              )}
+            </View>
 
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Trusted Contacts</Text>
@@ -754,6 +1036,34 @@ const DashboardScreen = ({ navigation, route }) => {
           </GlassCard>
         </View>
       </Modal>
+
+      {/* FAKE CALL INCOMING MODAL */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={isFakeCallModalVisible} // Corrected variable name
+        onRequestClose={handleEndFakeCall} // Allows back button to dismiss (Android)
+      >
+        <View style={styles.fakeCallCenteredView}>
+          <View style={styles.fakeCallScreen}>
+            <Text style={styles.fakeCallStatus}>Incoming Call</Text>
+            <Ionicons name="call" size={80} color="green" style={styles.callIcon} />
+            <Text style={styles.fakeCallerName}>{fakeCallerName}</Text>
+            <Text style={styles.fakeCallerNumber}>{fakeCallerNumber}</Text>
+
+            <View style={styles.fakeCallActions}>
+              <TouchableOpacity onPress={handleEndFakeCall} style={[styles.fakeCallActionButton, styles.declineButton]}>
+                <Ionicons name="call" size={30} color="white" />
+                <Text style={styles.fakeCallActionText}>Decline</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={handleEndFakeCall} style={[styles.fakeCallActionButton, styles.acceptButton]}>
+                <Ionicons name="call" size={30} color="white" />
+                <Text style={styles.fakeCallActionText}>Accept</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -821,7 +1131,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#DC143C',
     shadowColor: '#DC143C',
     marginTop: 20,
-    marginBottom: 30,
+    marginBottom: 30, // Adjusted to make space for the recording button
   },
   sosButtonText: {
     fontSize: 20,
@@ -835,6 +1145,63 @@ const styles = StyleSheet.create({
   policeCallButtonText: {
     fontSize: 18,
   },
+  // --- AUDIO RECORDING BUTTON STYLES ---
+  audioRecordButton: {
+    backgroundColor: '#FFD700', // Gold color
+    shadowColor: '#FFD700',
+    marginTop: 10,
+    marginBottom: 10, // Added margin for spacing
+  },
+  audioRecordButtonText: {
+    fontSize: 18,
+    color: '#333', // Darker text for better contrast
+  },
+  recordingActive: {
+    backgroundColor: '#DC143C', // Red when recording
+    shadowColor: '#DC143C',
+  },
+  lastRecordingText: {
+    fontSize: 12,
+    color: '#777',
+    marginBottom: 5,
+    textAlign: 'center',
+  },
+  // --- END AUDIO RECORDING BUTTON STYLES ---
+
+  // --- FAKE CALL SETUP STYLES ---
+  input: {
+    height: 50,
+    borderColor: '#ddd',
+    borderWidth: 1,
+    borderRadius: 10,
+    marginBottom: 15,
+    paddingHorizontal: 15,
+    width: '100%',
+    fontSize: 16,
+    backgroundColor: '#f9f9f9',
+    color: '#333',
+  },
+  scheduleFakeCallButton: {
+    backgroundColor: '#28a745', // Green
+    shadowColor: '#28a745',
+    marginTop: 10,
+  },
+  cancelFakeCallButton: {
+    backgroundColor: '#ffc107', // Yellow
+    shadowColor: '#ffc107',
+    marginTop: 10,
+  },
+  cancelFakeCallButtonText: {
+    color: '#333',
+  },
+  scheduledText: {
+    fontSize: 16,
+    color: '#555',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  // --- END FAKE CALL SETUP STYLES ---
+
   section: {
     width: '100%',
     marginTop: 20,
@@ -931,9 +1298,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     marginLeft: 10,
   },
-  contactList: {
-    width: '100%',
-  },
   centeredView: {
     flex: 1,
     justifyContent: 'center',
@@ -990,6 +1354,78 @@ const styles = StyleSheet.create({
   modalCancelButtonText: {
     color: '#FF6347',
   },
+  // --- FAKE CALL MODAL STYLES ---
+  fakeCallCenteredView: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.8)', // Dark overlay
+  },
+  fakeCallScreen: {
+    width: '90%',
+    height: '70%', // Take up most of the screen
+    backgroundColor: '#333', // Dark background for call screen
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'space-around', // Distribute content evenly
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  fakeCallStatus: {
+    fontSize: 24,
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  callIcon: {
+    marginTop: 20,
+    marginBottom: 20,
+  },
+  fakeCallerName: {
+    fontSize: 36,
+    color: 'white',
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  fakeCallerNumber: {
+    fontSize: 22,
+    color: '#ccc',
+    marginBottom: 40,
+  },
+  fakeCallActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    paddingHorizontal: 20,
+  },
+  fakeCallActionButton: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 5,
+  },
+  declineButton: {
+    backgroundColor: '#dc3545', // Red
+  },
+  acceptButton: {
+    backgroundColor: '#28a745', // Green
+  },
+  fakeCallActionText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginTop: 5,
+  },
+  // --- END FAKE CALL MODAL STYLES ---
 });
 
 export default DashboardScreen;
