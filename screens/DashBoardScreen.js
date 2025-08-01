@@ -89,7 +89,7 @@ const DashboardScreen = ({ navigation, route }) => {
   const lastShakeTime = useRef(0);
   // *** END SHAKE DETECTION STATE ***
 
-  const backendBaseUrl = 'https://raksha-backend-d1gkrxvx8-mohammadshafishaiks-projects.vercel.app'; // <--- VERIFY/REPLACE THIS WITH YOUR CURRENT IP
+  const backendBaseUrl = 'http://192.168.1.6:5000'; // <--- VERIFY/REPLACE THIS WITH YOUR CURRENT IP
 
   const mapRef = useRef(null);
 
